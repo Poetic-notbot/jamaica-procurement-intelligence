@@ -1,6 +1,7 @@
 """
-SQLite persistence layer using SQLAlchemy Core.
-Database file: procurement.db (project root).
+Upgraded SQLite persistence layer — Jamaica Procurement OS
+Schema v2: full category intelligence, supplier profiling,
+competition metrics, compliance vault prep, watchlists.
 """
 from __future__ import annotations
 
@@ -10,151 +11,202 @@ from datetime import datetime, timezone
 
 from sqlalchemy import (
     create_engine, MetaData, Table, Column, Integer, String,
-    Float, DateTime, text, inspect as sa_inspect,
+    Float, DateTime, Boolean, Text, UniqueConstraint,
+    text, inspect as sa_inspect,
 )
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 
 logger = logging.getLogger(__name__)
 
 DB_PATH = os.getenv("DB_PATH", "procurement.db")
-DB_URL = f"sqlite:///{DB_PATH}"
+DB_URL  = f"sqlite:///{DB_PATH}"
 metadata = MetaData()
 
 awards_table = Table(
     "contract_awards", metadata,
-    Column("id", Integer, primary_key=True, autoincrement=True),
-    Column("procurement_method", String),
-    Column("procuring_entity", String),
-    Column("title", String),
-    Column("contract_amount_jmd", Float),
-    Column("publication_date", String),
-    Column("notice_pdf_url", String),
-    Column("source_url", String),
-    Column("category", String),
-    Column("scraped_at", DateTime),
+    Column("id",                   Integer, primary_key=True, autoincrement=True),
+    Column("procurement_method",   String),
+    Column("procuring_entity",     String, index=True),
+    Column("title",                String),
+    Column("contract_amount_jmd",  Float),
+    Column("publication_date",     String),
+    Column("notice_pdf_url",       String),
+    Column("source_url",           String),
+    Column("normalized_category",  String, index=True),
+    Column("category_confidence",  Float),
+    Column("supplier_name",        String),
+    Column("scraped_at",           DateTime),
+    Column("data_hash",            String),
+    UniqueConstraint("data_hash", name="uq_award_hash"),
 )
 
 bids_table = Table(
     "opened_bids", metadata,
-    Column("id", Integer, primary_key=True, autoincrement=True),
-    Column("cft_title", String),
-    Column("reference_number", String),
-    Column("procuring_entity", String),
-    Column("submission_deadline", String),
-    Column("procurement_method", String),
-    Column("status", String),
-    Column("opened_bids_url", String),
-    Column("source_url", String),
-    Column("category", String),
-    Column("scraped_at", DateTime),
+    Column("id",                   Integer, primary_key=True, autoincrement=True),
+    Column("cft_title",            String),
+    Column("reference_number",     String),
+    Column("procuring_entity",     String, index=True),
+    Column("submission_deadline",  String),
+    Column("award_date",           String),
+    Column("procurement_method",   String),
+    Column("status",               String),
+    Column("opened_bids_url",      String),
+    Column("source_url",           String),
+    Column("normalized_category",  String, index=True),
+    Column("category_confidence",  Float),
+    Column("bidder_count",         Integer),
+    Column("scraped_at",           DateTime),
+    Column("data_hash",            String),
+    UniqueConstraint("data_hash", name="uq_bid_hash"),
 )
 
-supplier_summary_table = Table(
-    "supplier_summary", metadata,
-    Column("id", Integer, primary_key=True, autoincrement=True),
-    Column("supplier_name", String),
-    Column("award_count", Integer),
-    Column("total_award_value", Float),
-    Column("avg_award_value", Float),
-    Column("categories", String),
-    Column("last_updated", DateTime),
+suppliers_table = Table(
+    "suppliers", metadata,
+    Column("id",                Integer, primary_key=True, autoincrement=True),
+    Column("supplier_name",     String, unique=True, index=True),
+    Column("award_count",       Integer, default=0),
+    Column("total_award_value", Float,   default=0.0),
+    Column("avg_award_value",   Float,   default=0.0),
+    Column("categories",        Text),
+    Column("buyers",            Text),
+    Column("first_seen",        String),
+    Column("last_seen",         String),
+    Column("last_updated",      DateTime),
 )
 
+competition_table = Table(
+    "competition_metrics", metadata,
+    Column("id",                Integer, primary_key=True, autoincrement=True),
+    Column("category",          String, index=True),
+    Column("procuring_entity",  String, index=True),
+    Column("avg_bidders",       Float),
+    Column("median_bidders",    Float),
+    Column("min_bidders",       Integer),
+    Column("max_bidders",       Integer),
+    Column("total_tenders",     Integer),
+    Column("last_updated",      DateTime),
+)
+
+supplier_profiles_table = Table(
+    "supplier_profiles", metadata,
+    Column("id",                     Integer, primary_key=True, autoincrement=True),
+    Column("company_name",           String, unique=True, index=True),
+    Column("trn",                    String),
+    Column("tcc_expiry",             String),
+    Column("ncc_status",             String),
+    Column("insurance_expiry",       String),
+    Column("reference_letters_count",Integer, default=0),
+    Column("categories",             Text),
+    Column("document_urls",          Text),
+    Column("created_at",             DateTime),
+    Column("updated_at",             DateTime),
+)
+
+watchlists_table = Table(
+    "watchlists", metadata,
+    Column("id",          Integer, primary_key=True, autoincrement=True),
+    Column("watch_type",  String),
+    Column("watch_value", String),
+    Column("created_at",  DateTime),
+    UniqueConstraint("watch_type", "watch_value", name="uq_watchlist"),
+)
+
+audit_log_table = Table(
+    "audit_log", metadata,
+    Column("id",            Integer, primary_key=True, autoincrement=True),
+    Column("run_at",        DateTime),
+    Column("awards_total",  Integer),
+    Column("bids_total",    Integer),
+    Column("awards_dupes",  Integer),
+    Column("bids_dupes",    Integer),
+    Column("null_issues",   Integer),
+    Column("date_errors",   Integer),
+    Column("amount_errors", Integer),
+    Column("notes",         Text),
+)
+
+_engine = None
 
 def get_engine():
-    return create_engine(DB_URL, echo=False)
+    global _engine
+    if _engine is None:
+        _engine = create_engine(DB_URL, connect_args={"check_same_thread": False})
+    return _engine
 
 
 def init_db():
     engine = get_engine()
     metadata.create_all(engine)
-    return engine
+    _run_migrations(engine)
+    logger.info("DB initialised at %s", DB_PATH)
 
 
-def _table_exists(engine, name: str) -> bool:
-    return name in sa_inspect(engine).get_table_names()
-
-
-def upsert_awards(records: list[dict]) -> int:
-    if not records:
-        return 0
-    engine = init_db()
-    inserted = 0
+def _run_migrations(engine):
+    inspector = sa_inspect(engine)
     with engine.begin() as conn:
-        for rec in records:
-            rec.setdefault("scraped_at", datetime.now(timezone.utc))
-            stmt = sqlite_insert(awards_table).values(**rec).on_conflict_do_nothing()
-            result = conn.execute(stmt)
-            inserted += result.rowcount
-    return inserted
+        for table_name, new_cols in [
+            ("contract_awards", [
+                ("normalized_category", "TEXT"),
+                ("category_confidence",  "REAL"),
+                ("supplier_name",        "TEXT"),
+                ("data_hash",            "TEXT"),
+            ]),
+            ("opened_bids", [
+                ("normalized_category", "TEXT"),
+                ("category_confidence",  "REAL"),
+                ("bidder_count",         "INTEGER"),
+                ("award_date",           "TEXT"),
+                ("data_hash",            "TEXT"),
+            ]),
+        ]:
+            if table_name not in inspector.get_table_names():
+                continue
+            existing = {c["name"] for c in inspector.get_columns(table_name)}
+            for col_name, col_type in new_cols:
+                if col_name not in existing:
+                    conn.execute(text(
+                        f"ALTER TABLE {table_name} ADD COLUMN {col_name} {col_type}"
+                    ))
 
 
-def upsert_bids(records: list[dict]) -> int:
-    if not records:
-        return 0
-    engine = init_db()
-    inserted = 0
-    with engine.begin() as conn:
-        for rec in records:
-            rec.setdefault("scraped_at", datetime.now(timezone.utc))
-            stmt = sqlite_insert(bids_table).values(**rec).on_conflict_do_nothing()
-            result = conn.execute(stmt)
-            inserted += result.rowcount
-    return inserted
+def upsert_award(conn, row: dict):
+    stmt = sqlite_insert(awards_table).values(**row)
+    stmt = stmt.on_conflict_do_nothing(index_elements=["data_hash"])
+    conn.execute(stmt)
 
 
-def rebuild_supplier_summary(engine=None) -> int:
-    if engine is None:
-        engine = get_engine()
-    if not _table_exists(engine, "contract_awards"):
-        return 0
-    with engine.begin() as conn:
-        rows = conn.execute(text("""
-            SELECT procuring_entity,
-                   COUNT(*) as award_count,
-                   SUM(contract_amount_jmd) as total_value,
-                   AVG(contract_amount_jmd) as avg_value,
-                   GROUP_CONCAT(DISTINCT category) as cats
-            FROM contract_awards
-            WHERE procuring_entity IS NOT NULL
-            GROUP BY procuring_entity
-        """)).fetchall()
-        conn.execute(text("DELETE FROM supplier_summary"))
-        now = datetime.now(timezone.utc)
-        for row in rows:
-            conn.execute(supplier_summary_table.insert().values(
-                supplier_name=row[0], award_count=row[1],
-                total_award_value=row[2] or 0.0, avg_award_value=row[3] or 0.0,
-                categories=row[4] or "", last_updated=now,
-            ))
-    return len(rows)
+def upsert_bid(conn, row: dict):
+    stmt = sqlite_insert(bids_table).values(**row)
+    stmt = stmt.on_conflict_do_nothing(index_elements=["data_hash"])
+    conn.execute(stmt)
 
 
-def load_awards() -> list[dict]:
-    engine = get_engine()
-    if not _table_exists(engine, "contract_awards"):
-        return []
-    with engine.connect() as conn:
-        rows = conn.execute(text("SELECT * FROM contract_awards ORDER BY id DESC")).fetchall()
-        keys = [c.key for c in awards_table.columns]
-        return [dict(zip(keys, row)) for row in rows]
+def upsert_supplier(conn, row: dict):
+    stmt = sqlite_insert(suppliers_table).values(**row)
+    stmt = stmt.on_conflict_do_update(
+        index_elements=["supplier_name"],
+        set_={k: v for k, v in row.items() if k != "supplier_name"},
+    )
+    conn.execute(stmt)
 
 
-def load_bids() -> list[dict]:
-    engine = get_engine()
-    if not _table_exists(engine, "opened_bids"):
-        return []
-    with engine.connect() as conn:
-        rows = conn.execute(text("SELECT * FROM opened_bids ORDER BY id DESC")).fetchall()
-        keys = [c.key for c in bids_table.columns]
-        return [dict(zip(keys, row)) for row in rows]
+def add_watchlist(conn, watch_type: str, watch_value: str):
+    stmt = sqlite_insert(watchlists_table).values(
+        watch_type=watch_type,
+        watch_value=watch_value,
+        created_at=datetime.now(timezone.utc),
+    )
+    stmt = stmt.on_conflict_do_nothing(
+        index_elements=["watch_type", "watch_value"]
+    )
+    conn.execute(stmt)
 
 
-def load_supplier_summary() -> list[dict]:
-    engine = get_engine()
-    if not _table_exists(engine, "supplier_summary"):
-        return []
-    with engine.connect() as conn:
-        rows = conn.execute(text("SELECT * FROM supplier_summary ORDER BY total_award_value DESC")).fetchall()
-        keys = [c.key for c in supplier_summary_table.columns]
-        return [dict(zip(keys, row)) for row in rows]
+def remove_watchlist(conn, watch_type: str, watch_value: str):
+    conn.execute(
+        watchlists_table.delete().where(
+            (watchlists_table.c.watch_type  == watch_type) &
+            (watchlists_table.c.watch_value == watch_value)
+        )
+    )
+
