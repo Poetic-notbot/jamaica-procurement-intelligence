@@ -55,7 +55,7 @@ def compute_win_rates(awards_df: pd.DataFrame, bids_df: pd.DataFrame) -> pd.Data
             "win_rate_pct":    round(win_rate, 1) if win_rate is not None else None,
             "total_value_won": award_values.get(sup, 0.0),
         })
-    return pd.DataFrame(rows, columns=["supplier", "bids_entered", "contracts_won", "win_rate_pct", "total_value_won"]).sort_values("total_value_won", ascending=False)
+    _wr = pd.DataFrame(rows, columns=["supplier", "bids_entered", "contracts_won", "win_rate_pct", "total_value_won"]); return _wr.sort_values("total_value_won", ascending=False) if ("total_value_won" in _wr.columns and not _wr.empty) else _wr
 
 
 # ─────────────────────────────────────────────────────────────
