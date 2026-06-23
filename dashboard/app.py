@@ -75,6 +75,30 @@ with st.sidebar:
     if st.button("Refresh Data", use_container_width=True):
         st.cache_data.clear()
         st.rerun()
+    st.markdown("---")
+    with st.expander("Admin: GOJEP Scraper"):
+        _max_pages = st.number_input("Max pages (0 = all ~1231)", min_value=0, max_value=2000, value=2, step=1)
+        if st.button("Run scraper now", use_container_width=True):
+            try:
+                from scrapers.awards_scraper import scrape_awards
+                _mp = int(_max_pages) if int(_max_pages) > 0 else 2000
+                with st.spinner("Scraping GOJEP Contract Award Notices..."):
+                    _summary = scrape_awards(max_pages=_mp)
+                st.success("{}: {} new of {} seen across {} pages.".format(_summary.get("status"), _summary.get("rows_new"), _summary.get("rows_seen"), _summary.get("pages_fetched")))
+                st.cache_data.clear()
+            except Exception as _e:
+                st.error("Scraper failed: {}".format(_e))
+        try:
+            from database.db import get_engine
+            from sqlalchemy import text as _sql_text
+            with get_engine().connect() as _c:
+                _r = _c.execute(_sql_text("SELECT status, pages_fetched, rows_new, total_available, finished_at FROM scraper_runs ORDER BY id DESC LIMIT 1")).fetchone()
+            if _r:
+                st.caption("Last run: {} | {} new | {} pages | of {} total | {}".format(_r[0], _r[2], _r[1], _r[3], _r[4]))
+            else:
+                st.caption("No scraper runs yet.")
+        except Exception:
+            st.caption("No run history yet.")
 
 # ── 20 TABS ──────────────────────────────────────────────
 tabs = st.tabs([
