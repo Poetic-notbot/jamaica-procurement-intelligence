@@ -1,0 +1,68 @@
+# .github/workflows/scraper.yml
+# Feature 2: Scheduled Scraper — runs daily at 03:00 UTC
+# Also triggered manually via workflow_dispatch.
+# Commits updated procurement.db back to the repository.
+
+name: Daily Procurement Scraper
+
+on:
+  schedule:
+    - cron: "0 3 * * *"  # 03:00 UTC = ~10pm Jamaica time
+  workflow_dispatch:     # Manual trigger from GitHub Actions tab
+    inputs:
+      max_pages:
+        description: "Max pages to scrape per source (0 = unlimited)"
+        required: false
+        default: "50"
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Cache pip dependencies
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles("requirements.txt") }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Install dependencies
+        run: |
+          pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install pdfplumber PyPDF2  # PDF parsing extras
+
+      - name: Run scrapers
+        env:
+          DB_PATH: procurement.db
+          MAX_PAGES: ${{ github.event.inputs.max_pages || 50 }}
+          SCRAPE_DELAY: "1.5"
+        run: |
+          python run_scrapers.py --max-pages $MAX_PAGES
+
+      - name: Commit updated database
+        run: |
+          git config --local user.email "scraper-bot@github-actions"
+          git config --local user.name "Procurement Scraper Bot"
+          git add procurement.db data/ || true
+          git diff --staged --quiet || git commit -m "chore: scraper run $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          git push
+
+      - name: Upload DB artifact (for debugging)
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: procurement-db
+          path: procurement.db
+          retention-days: 7
