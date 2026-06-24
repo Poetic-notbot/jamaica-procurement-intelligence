@@ -5,7 +5,7 @@
 
 name: Daily Procurement Scraper
 
-on:h
+on:
   schedule:
     - cron: "0 3 * * *"  # 03:00 UTC = ~10pm Jamaica time
   workflow_dispatch:     # Manual trigger from GitHub Actions tab
