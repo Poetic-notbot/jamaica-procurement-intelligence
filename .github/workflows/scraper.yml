@@ -41,7 +41,6 @@ jobs:
         run: |
           pip install --upgrade pip
           pip install -r requirements.txt
-          pip install pdfplumber PyPDF2  # PDF parsing extras
 
       - name: Run scrapers
         env:
@@ -49,7 +48,7 @@ jobs:
           MAX_PAGES: ${{ github.event.inputs.max_pages || 50 }}
           SCRAPE_DELAY: "1.5"
         run: |
-          python run_scrapers.py --max-pages $MAX_PAGES
+          python run_scrapers.py --pages $MAX_PAGES
 
       - name: Commit updated database
         run: |
