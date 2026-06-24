@@ -7,7 +7,41 @@ from __future__ import annotations
 import os
 import logging
 from datetime import datetime, timezone
-from utils.helpers import get_session, fetch_page, clean_text, BASE_URL, normalise_category
+import time
+import requests
+from bs4 import BeautifulSoup
+from utils.helpers import classify_category, make_bid_hash
+
+BASE_URL = "https://www.gojep.gov.jm"
+TIMEOUT = float(os.getenv("SCRAPE_TIMEOUT", "30"))
+USER_AGENT = os.getenv(
+    "SCRAPE_UA",
+    "Mozilla/5.0 (compatible; JamaicaProcurementOS/1.0; +bids-archiver)",
+)
+
+
+def get_session() -> requests.Session:
+    s = requests.Session()
+    s.headers.update({"User-Agent": USER_AGENT, "Accept": "text/html"})
+    return s
+
+
+def fetch_page(session: requests.Session, url: str, delay: float = 1.5):
+    try:
+        time.sleep(delay)
+        resp = session.get(url, timeout=TIMEOUT)
+        resp.raise_for_status()
+        return BeautifulSoup(resp.text, "lxml")
+    except Exception as exc:
+        logging.getLogger(__name__).warning("fetch failed for %s : %s", url, exc)
+        return None
+
+def clean_text(raw) -> str:
+    """Strip whitespace from a string value."""
+    return str(raw or "").strip()
+
+
+
 
 logger = logging.getLogger(__name__)
 BIDS_BASE = (
@@ -55,7 +89,7 @@ def _parse_page(soup) -> list[dict]:
             "status": status,
             "opened_bids_url": bids_url or None,
             "source_url": source_url or BIDS_BASE,
-            "category": normalise_category(title),
+            "category": classify_category(title),
             "scraped_at": datetime.now(timezone.utc),
         })
     return records
