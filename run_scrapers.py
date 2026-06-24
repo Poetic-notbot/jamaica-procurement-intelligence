@@ -24,7 +24,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 from scrapers.awards_scraper import scrape_awards
 from scrapers.bids_scraper import scrape_bids
-from database.db import upsert_awards, upsert_bids, init_db, rebuild_supplier_summary
+from database.db import init_db, get_engine, upsert_bid
 
 
 def main():
@@ -38,23 +38,22 @@ def main():
     run_awards = args.awards or (not args.awards and not args.bids)
     run_bids = args.bids or (not args.awards and not args.bids)
 
-    engine = init_db()
+    init_db()
+    engine = get_engine()
 
     if run_awards:
         logger.info("=== Scraping Contract Award Notices ===")
-        records = scrape_awards(max_pages=args.pages)
-        saved = upsert_awards(records)
-        logger.info("Saved %d new award records", saved)
+        summary = scrape_awards(max_pages=args.pages)
+        logger.info("Awards done: %s", summary)
 
     if run_bids:
         logger.info("=== Scraping Opened Bid Competitions ===")
         records = scrape_bids(max_pages=args.pages)
-        saved = upsert_bids(records)
-        logger.info("Saved %d new bid records", saved)
+        with engine.begin() as conn:
+            for r in records:
+                upsert_bid(conn, r)
+        logger.info("Saved %d bid records", len(records))
 
-    logger.info("=== Rebuilding Supplier Summary ===")
-    count = rebuild_supplier_summary(engine)
-    logger.info("Supplier summary: %d entries", count)
     logger.info("Done. DB: %s", os.getenv("DB_PATH", "procurement.db"))
 
 
