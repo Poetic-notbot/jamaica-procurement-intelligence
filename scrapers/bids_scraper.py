@@ -98,7 +98,7 @@ def _parse_page(soup) -> list[dict]:
 def scrape_bids(max_pages: int = 50) -> list[dict]:
     session = get_session()
     all_records = []
-    seen = set()scrapers/bids_scraper.py
+    seen = set()
     logger.info("Starting bids scrape - max %d pages", max_pages)
     for page_num in range(1, max_pages + 1):
         url = BIDS_BASE if page_num == 1 else f"{BIDS_BASE}&{PAGE_PARAM}={page_num}"
