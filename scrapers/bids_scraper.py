@@ -80,6 +80,7 @@ def _parse_page(soup) -> list[dict]:
         status = clean_text(cols[8].get_text()) if len(cols) > 8 else ""
         if not title:
             continue
+        category, confidence = classify_category(title)
         records.append({
             "cft_title": title,
             "reference_number": reference,
@@ -89,8 +90,10 @@ def _parse_page(soup) -> list[dict]:
             "status": status,
             "opened_bids_url": bids_url or None,
             "source_url": source_url or BIDS_BASE,
-            "category": classify_category(title),
+            "normalized_category": category,
+            "category_confidence": confidence,
             "scraped_at": datetime.now(timezone.utc),
+            "data_hash": make_bid_hash(reference, title, pe),
         })
     return records
 
